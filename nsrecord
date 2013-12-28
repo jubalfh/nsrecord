@@ -1,0 +1,185 @@
+#!/bin/bash
+
+# (c) 2013 Miroslaw Baran <miroslaw+p+nsrecord@makabra.org>
+
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+
+# wrap nsupdate to make zone updates slightly less inconvenient
+# requires confget utility to handle the *.ini configuration format
+
+# TODO(1): add better error handling
+# TODO(2): add argument checking based on the record type
+
+
+# usage
+help() {
+  cat << HELP
+Usage: $1 (add|del) dom.a.in RECORD_TYPE host[.dom.a.in] <dns record value>
+$1: DNS record management helper
+HELP
+}
+
+# utility functions
+
+# reverse words of given string
+reverse() {
+  for ((i=$#; i>0; i--)); do
+    echo -n ${!i}
+    if ((i>1)); then
+      echo -n " "
+    fi
+  done
+}
+
+# convert an IP to a PTR in-addr.arpa notation
+to_ptr_v4() {
+  local ip rev_ip_data
+  ip="$@"; rev_ip_data=$(reverse ${ip//./ })
+  echo "${rev_ip_data// /.}.in-addr.arpa"
+}
+
+# remove the dot from the name if it exists
+unqualify() {
+  local domain
+  domain="$1"
+  echo "${domain%%.}"
+}
+
+# qualify the dns name
+qualify() {
+  local domain
+  domain="$1"
+  echo "$(unqualify ${domain})."
+}
+
+log() {
+  if [[ "$1" == "error" ]]; then
+    prio="err"; shift
+  else
+    prio="info"
+  fi
+  logger -p daemon.${prio} -t "${progname}" -i "$@"
+}
+
+# action starts here
+
+# prepare script configuration
+prep_config() {
+  # check for confget
+  which confget 2>&1 >/dev/null || (
+    echo "The confget utility is not available. Please install it."
+    exit 1
+  )
+  trap "echo \"Error code caught: ${PIPESTATUS[@]}\"" ERR
+  # handle the actions
+  if [[ "$1" == "add" ]]; then
+      action="add"; shift
+  elif [[ "$1" =~ (del|delete) ]]; then
+      action="delete"; shift
+  fi
+  # assign arguments from command line, clean them a bit
+  read -r domain rec_type rec_lvalue rec_rvalue <<< "$@"
+  domain="$(unqualify ${domain})"
+  rec_type="${rec_type^^}"
+  # read the configuration files (if they exist)
+  if [[ -e "/etc/nsrecord.ini" ]]; then
+    eval $(confget -l -f /etc/nsrecord.ini -s default -S)
+    eval $(confget -l -f /etc/nsrecord.ini -s ${domain} -S)
+  fi
+  if [[ -e "$HOME/.nsrecord/config" ]]; then
+    eval $(confget -l -f $HOME/.nsrecord/config -s default -S)
+    eval $(confget -l -f $HOME/.nsrecord/config -s ${domain} -S)
+  fi
+}
+
+# talk to the nsupdate command, catch erros, don't break
+nsupdate_wrap() {
+  # handle arguments
+  local action ns domain ttl rec_type rec_lvalue rec_rvalue script
+  read -r action ns domain ttl rec_type rec_lvalue rec_rvalue <<< "$@"
+  domain=$(qualify ${domain})
+  ns=$(qualify ${ns})
+  # handle record type-dependent actions
+  if [[ "${rec_type}" == "TXT" ]]; then
+    rec_rvalue="\"${rec_rvalue}\""
+  fi
+  # prepare the nsupdate script
+  script=()
+  script+=("server ${ns}")
+  script+=("zone ${domain}")
+  script+=("ttl ${ttl}")
+  script+=("prereq yxdomain ${domain}")
+  if [[ "${rec_type}" == "PTR" && "${action}" == "add" ]]; then
+    script+=("prereq nxrrset ${rec_lvalue} ${rec_type}")
+  elif [[ "${action}" == "delete" ]]; then
+    script+=("prereq yxrrset ${rec_lvalue} ${rec_type}")
+  fi
+  script+=("update ${action} ${rec_lvalue} ${rec_type} ${rec_rvalue}")
+  script+=("send")
+  # script+=("answer")
+  script+=("quit")
+  # ...and run it
+  status=$(
+    for ((i=0; i<=${#script[@]}; i++)); do
+      echo "${script[$i]}"
+    done | nsupdate -v -k ${keyfile} 2>&1
+  ) && rc=0 || rc=$?
+  log_message="${action} ${rec_type} ${rec_lvalue} ${rec_rvalue}"
+  # handle the least probable cases: success and failure
+  if [[ ${rc} = 0 ]]; then
+    status="update succeeded"
+    log "successful zone update for [${domain}]: ${log_message}."
+  else
+    log "error" "unsuccesful zone update for [${domain}]: ${log_message}. Command returned: ${status}."
+  fi
+  echo "${status}"
+}
+
+
+# the actual script body
+main() {
+  set -eE
+  set -o pipefail
+
+  progname=$(basename $0)
+
+
+  if [[ $# < 5 ]]; then
+      help ${progname}
+      exit 1
+  fi
+
+  prep_config "$@"
+
+  # run the dns update...
+  echo "update status: $(nsupdate_wrap ${action} ${ns} ${domain} ${ttl} ${rec_type} ${rec_lvalue} ${rec_rvalue})."
+  # ...handle the PTR if configured to do so.
+  if [[ "${rec_type}" == "A" ]]; then
+    if [[ "${do_revdns}" == "true" ]]; then
+      nsupdate_wrap ${action} ${ns} ${rev_zone} ${ttl} "PTR" $(to_ptr_v4 ${rec_rvalue##* }) ${rec_lvalue} >/dev/null || true
+    fi
+  fi
+
+  trap - ERR
+}
+
+# script execution
+main $@
