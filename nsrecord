@@ -49,6 +49,12 @@ reverse() {
   done
 }
 
+endswith() {
+  local string char
+  read -r string char <<< "$@"
+  [[ "${string: -1: 1}" == "${char}" ]]
+}
+
 # convert an IP to a PTR in-addr.arpa notation
 to_ptr_v4() {
   local ip rev_ip_data
@@ -124,13 +130,17 @@ nsupdate_wrap() {
   local action ns domain ttl rtype rr rdata line
   local -a dns_rdata script
   read -r action ns domain ttl rtype rr rdata <<< "$@"
+  # make required assumptions
   domain=$(qualify ${domain})
   ns=$(qualify ${ns})
+  if ! endswith $rr "."; then
+    rr="${rr}.${domain}"
+  fi
   # handle record type-dependent actions
   if [[ "${rtype}" == "TXT" ]]; then
     rdata="\"${rdata}\""
   fi
-  # read existing records
+  # read existing records, just in case
   while read -r line; do
     if [[ "${rdata}" != *${line}* ]]; then
       dns_rdata+=("${line}")
