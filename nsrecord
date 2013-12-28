@@ -118,7 +118,7 @@ prep_config() {
   fi
 }
 
-# talk to the nsupdate command, catch erros, don't break
+# talk to the nsupdate command, catch errors, don't break
 nsupdate_wrap() {
   # handle arguments
   local action ns domain ttl rec_type rec_lvalue rec_rvalue line
