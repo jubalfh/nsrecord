@@ -72,9 +72,9 @@ qualify() {
 
 # grab the records from the DNS
 get_rdata() {
-  local ns rec_type rec_lvalue
-  read -r ns rec_type rec_lvalue <<< "$@"
-  dig "+short" "@${ns}" "${rec_lvalue}" "${rec_type}"
+  local ns rtype rr
+  read -r ns rtype rr <<< "$@"
+  dig "+short" "@${ns}" "${rr}" "${rtype}"
 }
 
 # simple wrapper on logger
@@ -104,9 +104,9 @@ prep_config() {
       action="delete"; shift
   fi
   # assign arguments from command line, clean them a bit
-  read -r domain rec_type rec_lvalue rec_rvalue <<< "$@"
+  read -r domain rtype rr rdata <<< "$@"
   domain="$(unqualify ${domain})"
-  rec_type="${rec_type^^}"
+  rtype="${rtype^^}"
   # read the configuration files (if they exist)
   if [[ -e "/etc/nsrecord.ini" ]]; then
     eval $(confget -l -f /etc/nsrecord.ini -s default -S)
@@ -121,38 +121,38 @@ prep_config() {
 # talk to the nsupdate command, catch errors, don't break
 nsupdate_wrap() {
   # handle arguments
-  local action ns domain ttl rec_type rec_lvalue rec_rvalue line
-  local -a rdata script
-  read -r action ns domain ttl rec_type rec_lvalue rec_rvalue <<< "$@"
+  local action ns domain ttl rtype rr rdata line
+  local -a dns_rdata script
+  read -r action ns domain ttl rtype rr rdata <<< "$@"
   domain=$(qualify ${domain})
   ns=$(qualify ${ns})
   # handle record type-dependent actions
-  if [[ "${rec_type}" == "TXT" ]]; then
-    rec_rvalue="\"${rec_rvalue}\""
+  if [[ "${rtype}" == "TXT" ]]; then
+    rdata="\"${rdata}\""
   fi
   # read existing records
   while read -r line; do
-    if [[ "${rec_rvalue}" != *${line}* ]]; then
-      rdata+=("${line}")
+    if [[ "${rdata}" != *${line}* ]]; then
+      dns_rdata+=("${line}")
     fi
-  done < <(get_rdata ${ns} ${rec_type} ${rec_lvalue})
+  done < <(get_rdata ${ns} ${rtype} ${rr})
   # prepare the nsupdate script
   script+=("server ${ns}")
   script+=("zone ${domain}")
   script+=("ttl ${ttl}")
   script+=("prereq yxdomain ${domain}")
   if [[ "${action}" == "add" ]]; then
-    if [[ "${rec_type}" == "PTR" ]]; then
-      script+=("prereq nxrrset ${rec_lvalue} ${rec_type}")
+    if [[ "${rtype}" == "PTR" ]]; then
+      script+=("prereq nxrrset ${rr} ${rtype}")
     fi
   elif [[ "${action}" == "delete" ]]; then
-    script+=("prereq yxrrset ${rec_lvalue} ${rec_type}")
-    script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rec_rvalue}")
-    for ((i=0; i<${#rdata[@]}; i++)); do
-      script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rdata[$i]}")
+    script+=("prereq yxrrset ${rr} ${rtype}")
+    script+=("prereq yxrrset ${rr} ${rtype} ${rdata}")
+    for ((i=0; i<${#dns_rdata[@]}; i++)); do
+      script+=("prereq yxrrset ${rr} ${rtype} ${dns_rdata[$i]}")
     done
   fi
-  script+=("update ${action} ${rec_lvalue} ${rec_type} ${rec_rvalue}")
+  script+=("update ${action} ${rr} ${rtype} ${rdata}")
   script+=("send")
   # script+=("answer")
   script+=("quit")
@@ -162,7 +162,7 @@ nsupdate_wrap() {
       echo "${script[$i]}"
     done | nsupdate -v -k ${keyfile} 2>&1
   ) && rc=0 || rc=$?
-  log_message="${action} ${rec_type} ${rec_lvalue} ${rec_rvalue}"
+  log_message="${action} ${rtype} ${rr} ${rdata}"
   # handle the least probable cases: success and failure
   if [[ ${rc} = 0 ]]; then
     status="update succeeded"
@@ -190,11 +190,11 @@ main() {
   prep_config "$@"
 
   # run the dns update...
-  echo "update status: $(nsupdate_wrap ${action} ${ns} ${domain} ${ttl} ${rec_type} ${rec_lvalue} ${rec_rvalue})."
+  echo "update status: $(nsupdate_wrap ${action} ${ns} ${domain} ${ttl} ${rtype} ${rr} ${rdata})."
   # ...handle the PTR if configured to do so.
   if [[ "${rec_type}" == "A" ]]; then
     if [[ "${do_revdns}" == "true" ]]; then
-      nsupdate_wrap ${action} ${ns} ${rev_zone} ${ttl} "PTR" $(to_ptr_v4 ${rec_rvalue##* }) ${rec_lvalue} >/dev/null || true
+      nsupdate_wrap ${action} ${ns} ${rev_zone} ${ttl} "PTR" $(to_ptr_v4 ${rdata##* }) ${rr} >/dev/null || true
     fi
   fi
 
