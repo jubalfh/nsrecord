@@ -126,13 +126,16 @@ nsupdate_wrap() {
   read -r action ns domain ttl rec_type rec_lvalue rec_rvalue <<< "$@"
   domain=$(qualify ${domain})
   ns=$(qualify ${ns})
-  while read -r line; do
-    rdata+=("${line}")
-  done < <(get_rdata ${ns} ${rec_type} ${rec_lvalue})
   # handle record type-dependent actions
   if [[ "${rec_type}" == "TXT" ]]; then
     rec_rvalue="\"${rec_rvalue}\""
   fi
+  # read existing records
+  while read -r line; do
+    if [[ "${rec_rvalue}" != *${line}* ]]; then
+      rdata+=("${line}")
+    fi
+  done < <(get_rdata ${ns} ${rec_type} ${rec_lvalue})
   # prepare the nsupdate script
   script+=("server ${ns}")
   script+=("zone ${domain}")
@@ -143,6 +146,9 @@ nsupdate_wrap() {
       script+=("prereq nxrrset ${rec_lvalue} ${rec_type}")
     fi
   elif [[ "${action}" == "delete" ]]; then
+    script+=("prereq yxrrset ${rec_lvalue} ${rec_type}")
+    script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rec_rvalue}")
+    echo "${#rdata[@]}" >&2
     for ((i=0; i<${#rdata[@]}; i++)); do
       script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rdata[$i]}")
     done
