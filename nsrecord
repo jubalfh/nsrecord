@@ -70,6 +70,14 @@ qualify() {
   echo "$(unqualify ${domain})."
 }
 
+# grab the records from the DNS
+get_rdata() {
+  local ns rec_type rec_lvalue
+  read -r ns rec_type rec_lvalue <<< "$@"
+  dig "+short" "@${ns}" "${rec_lvalue}" "${rec_type}"
+}
+
+# simple wrapper on logger
 log() {
   if [[ "$1" == "error" ]]; then
     prio="err"; shift
@@ -113,24 +121,31 @@ prep_config() {
 # talk to the nsupdate command, catch erros, don't break
 nsupdate_wrap() {
   # handle arguments
-  local action ns domain ttl rec_type rec_lvalue rec_rvalue script
+  local action ns domain ttl rec_type rec_lvalue rec_rvalue line
+  local -a rdata script
   read -r action ns domain ttl rec_type rec_lvalue rec_rvalue <<< "$@"
   domain=$(qualify ${domain})
   ns=$(qualify ${ns})
+  while read -r line; do
+    rdata+=("${line}")
+  done < <(get_rdata ${ns} ${rec_type} ${rec_lvalue})
   # handle record type-dependent actions
   if [[ "${rec_type}" == "TXT" ]]; then
     rec_rvalue="\"${rec_rvalue}\""
   fi
   # prepare the nsupdate script
-  script=()
   script+=("server ${ns}")
   script+=("zone ${domain}")
   script+=("ttl ${ttl}")
   script+=("prereq yxdomain ${domain}")
-  if [[ "${rec_type}" == "PTR" && "${action}" == "add" ]]; then
-    script+=("prereq nxrrset ${rec_lvalue} ${rec_type}")
+  if [[ "${action}" == "add" ]]; then
+    if [[ "${rec_type}" == "PTR" ]]; then
+      script+=("prereq nxrrset ${rec_lvalue} ${rec_type}")
+    fi
   elif [[ "${action}" == "delete" ]]; then
-    script+=("prereq yxrrset ${rec_lvalue} ${rec_type}")
+    for ((i=0; i<${#rdata[@]}; i++)); do
+      script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rdata[$i]}")
+    done
   fi
   script+=("update ${action} ${rec_lvalue} ${rec_type} ${rec_rvalue}")
   script+=("send")
@@ -138,7 +153,7 @@ nsupdate_wrap() {
   script+=("quit")
   # ...and run it
   status=$(
-    for ((i=0; i<=${#script[@]}; i++)); do
+    for ((i=0; i<${#script[@]}; i++)); do
       echo "${script[$i]}"
     done | nsupdate -v -k ${keyfile} 2>&1
   ) && rc=0 || rc=$?
