@@ -148,7 +148,6 @@ nsupdate_wrap() {
   elif [[ "${action}" == "delete" ]]; then
     script+=("prereq yxrrset ${rec_lvalue} ${rec_type}")
     script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rec_rvalue}")
-    echo "${#rdata[@]}" >&2
     for ((i=0; i<${#rdata[@]}; i++)); do
       script+=("prereq yxrrset ${rec_lvalue} ${rec_type} ${rdata[$i]}")
     done
