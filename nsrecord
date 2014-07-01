@@ -50,9 +50,10 @@ reverse() {
 }
 
 endswith() {
-  local string char
-  read -r string char <<< "$@"
-  [[ "${string: -1: 1}" == "${char}" ]]
+  local string substring length
+  read -r string substring <<< "$@"
+  length=${#substring}
+  [[ "${string: -${length}: ${length}}" == "${substring}" ]]
 }
 
 # convert an IP to a PTR in-addr.arpa notation
