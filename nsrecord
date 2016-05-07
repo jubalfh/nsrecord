@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# (c) 2013 Miroslaw Baran <miroslaw+p+nsrecord@makabra.org>
+# (c) 2013-2016 Miroslaw Baran <miroslaw+p+nsrecord@makabra.org>
 
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -60,7 +60,7 @@ endswith() {
 to_ptr_v4() {
   local ip rev_ip_data
   ip="$@"; rev_ip_data=$(reverse ${ip//./ })
-  echo "${rev_ip_data// /.}.in-addr.arpa"
+  echo "${rev_ip_data// /.}.in-addr.arpa."
 }
 
 # remove the dot from the name if it exists
@@ -141,6 +141,9 @@ nsupdate_wrap() {
   if [[ "${rtype}" == "TXT" ]]; then
     rdata="\"${rdata}\""
   fi
+  if [[ "${rtype}" == "NS" ]]; then
+    rdata="${rr}"; rr="${domain}"
+  fi
   # read existing records, just in case
   while read -r line; do
     if [[ "${rdata}" != *${line}* ]]; then
@@ -193,7 +196,7 @@ main() {
   progname=$(basename $0)
 
 
-  if [[ $# < 5 ]]; then
+  if [[ $# < 4 ]]; then
       help ${progname}
       exit 1
   fi
@@ -203,8 +206,11 @@ main() {
   # run the dns update...
   echo "update status: $(nsupdate_wrap ${action} ${ns} ${domain} ${ttl} ${rtype} ${rr} ${rdata})."
   # ...handle the PTR if configured to do so.
-  if [[ "${rec_type}" == "A" ]]; then
+  if [[ "${rtype}" == "A" ]]; then
     if [[ "${do_revdns}" == "true" ]]; then
+      if ! endswith $rr "."; then
+        rr="${rr}.${domain}"
+      fi
       nsupdate_wrap ${action} ${ns} ${rev_zone} ${ttl} "PTR" $(to_ptr_v4 ${rdata##* }) ${rr} >/dev/null || true
     fi
   fi
