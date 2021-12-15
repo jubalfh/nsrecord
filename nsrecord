@@ -28,10 +28,15 @@
 # TODO(1): add better error handling
 # TODO(2): add argument checking based on the record type
 
+# error handling
+shopt -s extglob
+set -o errexit
+set -o errtrace
+set -o pipefail
 
 # usage
 help() {
-  cat << HELP
+  cat <<HELP
 Usage: $1 (add|del) dom.a.in RECORD_TYPE host[.dom.a.in] <dns record value>
 $1: DNS record management helper
 HELP
@@ -41,9 +46,9 @@ HELP
 
 # reverse words of given string
 reverse() {
-  for ((i=$#; i>0; i--)); do
+  for ((i = $#; i > 0; i--)); do
     echo -n ${!i}
-    if ((i>1)); then
+    if ((i > 1)); then
       echo -n " "
     fi
   done
@@ -51,15 +56,16 @@ reverse() {
 
 endswith() {
   local string substring length
-  read -r string substring <<< "$@"
+  read -r string substring <<<"$@"
   length=${#substring}
-  [[ "${string: -${length}: ${length}}" == "${substring}" ]]
+  [[ "${string: -${length}:${length}}" == "${substring}" ]]
 }
 
 # convert an IP to a PTR in-addr.arpa notation
 to_ptr_v4() {
   local ip rev_ip_data
-  ip="$@"; rev_ip_data=$(reverse ${ip//./ })
+  ip="$*"
+  rev_ip_data="$(reverse "${ip//./ }")"
   echo "${rev_ip_data// /.}.in-addr.arpa."
 }
 
@@ -74,24 +80,25 @@ unqualify() {
 qualify() {
   local domain
   domain="$1"
-  echo "$(unqualify ${domain})."
+  echo "$(unqualify "${domain}")."
 }
 
 # grab the records from the DNS
 get_rdata() {
   local ns rtype rr
-  read -r ns rtype rr <<< "$@"
+  read -r ns rtype rr <<<"$@"
   dig "+short" "@${ns}" "${rr}" "${rtype}"
 }
 
 # simple wrapper on logger
 log() {
   if [[ "$1" == "error" ]]; then
-    prio="err"; shift
+    prio="err"
+    shift
   else
     prio="info"
   fi
-  logger -p daemon.${prio} -t "${progname}" -i "$@"
+  logger -p daemon.${prio} -t "${progname}" --id="${BASHPID}" "$@"
 }
 
 # action starts here
@@ -99,29 +106,31 @@ log() {
 # prepare script configuration
 prep_config() {
   # check for confget
-  which confget 2>&1 >/dev/null || (
+  which confget >/dev/null 2>&1 || (
     echo "The confget utility is not available. Please install it."
     exit 1
   )
-  trap "echo \"Error code caught: ${PIPESTATUS[@]}\"" ERR
+  trap 'echo "Error code caught: ${PIPESTATUS[*]}"' ERR
   # handle the actions
   if [[ "$1" == "add" ]]; then
-      action="add"; shift
+    action="add"
+    shift
   elif [[ "$1" =~ (del|delete) ]]; then
-      action="delete"; shift
+    action="delete"
+    shift
   fi
   # assign arguments from command line, clean them a bit
-  read -r domain rtype rr rdata <<< "$@"
-  domain="$(unqualify ${domain})"
+  read -r domain rtype rr rdata <<<"$@"
+  domain="$(unqualify "${domain}")"
   rtype="${rtype^^}"
   # read the configuration files (if they exist)
   if [[ -e "/etc/nsrecord.ini" ]]; then
-    eval $(confget -l -f /etc/nsrecord.ini -s default -S)
-    eval $(confget -l -f /etc/nsrecord.ini -s ${domain} -S)
+    eval "$(confget -l -f "/etc/nsrecord.ini" -s default -S)"
+    eval "$(confget -l -f "/etc/nsrecord.ini" -s "${domain}" -S)"
   fi
-  if [[ -e "$HOME/.nsrecord/config" ]]; then
-    eval $(confget -l -f $HOME/.nsrecord/config -s default -S)
-    eval $(confget -l -f $HOME/.nsrecord/config -s ${domain} -S)
+  if [[ -e "${HOME}/.nsrecord/config" ]]; then
+    eval "$(confget -l -f "${HOME}/.nsrecord/config" -s default -S)"
+    eval "$(confget -l -f "${HOME}/.nsrecord/config" -s "${domain}" -S)"
   fi
 }
 
@@ -130,11 +139,11 @@ nsupdate_wrap() {
   # handle arguments
   local action ns domain ttl rtype rr rdata line
   local -a dns_rdata script
-  read -r action ns domain ttl rtype rr rdata <<< "$@"
+  read -r action ns domain ttl rtype rr rdata <<<"$@"
   # make required assumptions
-  domain=$(qualify ${domain})
-  ns=$(qualify ${ns})
-  if ! endswith $rr "."; then
+  domain="$(qualify "${domain}")"
+  ns="$(qualify "${ns}")"
+  if ! endswith "${rr}" "."; then
     rr="${rr}.${domain}"
   fi
   # handle record type-dependent actions
@@ -142,14 +151,15 @@ nsupdate_wrap() {
     rdata="\"${rdata}\""
   fi
   if [[ "${rtype}" == "NS" ]]; then
-    rdata="${rr}"; rr="${domain}"
+    rdata="${rr}"
+    rr="${domain}"
   fi
   # read existing records, just in case
   while read -r line; do
     if [[ "${rdata}" != *${line}* ]]; then
       dns_rdata+=("${line}")
     fi
-  done < <(get_rdata ${ns} ${rtype} ${rr})
+  done < <(get_rdata "${ns}" "${rtype}" "${rr}")
   # prepare the nsupdate script
   script+=("server ${ns}")
   script+=("zone ${domain}")
@@ -162,7 +172,7 @@ nsupdate_wrap() {
   elif [[ "${action}" == "delete" ]]; then
     script+=("prereq yxrrset ${rr} ${rtype}")
     script+=("prereq yxrrset ${rr} ${rtype} ${rdata}")
-    for ((i=0; i<${#dns_rdata[@]}; i++)); do
+    for ((i = 0; i < ${#dns_rdata[@]}; i++)); do
       script+=("prereq yxrrset ${rr} ${rtype} ${dns_rdata[$i]}")
     done
   fi
@@ -172,13 +182,13 @@ nsupdate_wrap() {
   script+=("quit")
   # ...and run it
   status=$(
-    for ((i=0; i<${#script[@]}; i++)); do
+    for ((i = 0; i < ${#script[@]}; i++)); do
       echo "${script[$i]}"
-    done | nsupdate -v -k ${keyfile} 2>&1
+    done | nsupdate -v -k "${keyfile}" 2>&1
   ) && rc=0 || rc=$?
   log_message="${action} ${rtype} ${rr} ${rdata}"
   # handle the least probable cases: success and failure
-  if [[ ${rc} = 0 ]]; then
+  if ((rc == 0)); then
     status="update succeeded"
     log "successful zone update for [${domain}]: ${log_message}."
   else
@@ -187,31 +197,28 @@ nsupdate_wrap() {
   echo "${status}"
 }
 
-
 # the actual script body
 main() {
-  set -eE
-  set -o pipefail
+  progname="$(basename "$0")"
 
-  progname=$(basename $0)
-
-
-  if [[ $# < 4 ]]; then
-      help ${progname}
-      exit 1
+  if (($# < 4)); then
+    help "${progname}"
+    exit
   fi
+
+  declare do_revdns rev_zone keyfile
 
   prep_config "$@"
 
   # run the dns update...
-  echo "update status: $(nsupdate_wrap ${action} ${ns} ${domain} ${ttl} ${rtype} ${rr} ${rdata})."
+  echo "update status: $(nsupdate_wrap "${action}" "${ns}" "${domain}" "${ttl}" "${rtype}" "${rr}" "${rdata}")."
   # ...handle the PTR if configured to do so.
   if [[ "${rtype}" == "A" ]]; then
-    if [[ "${do_revdns}" == "true" ]]; then
-      if ! endswith $rr "."; then
+    if [[ "${do_revdns}" == "true" ]] && [[ -n "${rev_zone}" ]]; then
+      if ! endswith "${rr}" "."; then
         rr="${rr}.${domain}"
       fi
-      nsupdate_wrap ${action} ${ns} ${rev_zone} ${ttl} "PTR" $(to_ptr_v4 ${rdata##* }) ${rr} >/dev/null || true
+      nsupdate_wrap "${action}" "${ns}" "${rev_zone}" "${ttl}" "PTR" "$(to_ptr_v4 "${rdata##* }")" "${rr}" >/dev/null || true
     fi
   fi
 
@@ -219,4 +226,4 @@ main() {
 }
 
 # script execution
-main $@
+main "$@"
