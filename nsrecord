@@ -54,6 +54,15 @@ reverse() {
   done
 }
 
+butfirst() {
+  for ((i = 2; i <= $#; i++)); do
+    echo -n ${!i}
+    if ((i < $#)); then
+      echo -n " "
+    fi
+  done
+}
+
 endswith() {
   local string substring length
   read -r string substring <<<"$@"
@@ -65,7 +74,16 @@ endswith() {
 to_ptr_v4() {
   local ip rev_ip_data
   ip="$*"
-  rev_ip_data="$(reverse "${ip//./ }")"
+  rev_ip_data="$(reverse ${ip//./ })"
+  echo "${rev_ip_data// /.}.in-addr.arpa."
+}
+
+# get the reverse domain name
+to_reverse_zone() {
+  local ip
+  local -a rev_ip_data
+  ip="$*"
+  rev_ip_data="$(butfirst $(reverse ${ip//./ }))"
   echo "${rev_ip_data// /.}.in-addr.arpa."
 }
 
@@ -132,6 +150,12 @@ prep_config() {
     eval "$(confget -l -f "${HOME}/.nsrecord/config" -s default -S)"
     eval "$(confget -l -f "${HOME}/.nsrecord/config" -s "${domain}" -S)"
   fi
+  # create mapping for possible reverse zones
+  : "${reverse_zones:=""}"
+  declare -A managed_reverse_zones
+  for zone in ${reverse_zones}; do
+    managed_reverse_zones["$(qualify "${zone}")"]=1
+  done
 }
 
 # talk to the nsupdate command, catch errors, don't break
@@ -142,7 +166,7 @@ nsupdate_wrap() {
   read -r action ns domain ttl rtype rr rdata <<<"$@"
   # make required assumptions
   domain="$(qualify "${domain}")"
-  ns="$(qualify "${ns}")"
+  # ns="$(qualify "${ns}")"
   if ! endswith "${rr}" "."; then
     rr="${rr}.${domain}"
   fi
@@ -177,8 +201,22 @@ nsupdate_wrap() {
     done
   fi
   script+=("update ${action} ${rr} ${rtype} ${rdata}")
+  if [[ "${rtype}" == "A" ]]; then
+    if [[ "${do_revdns}" == "true" ]]; then
+      rev_zone="$(qualify $(to_reverse_zone "${rdata##* }"))"
+      if [[ -v managed_reverse_zones["${rev_zone}" ]]; then
+        if ! endswith "${rr}" "."; then
+          rr="${rr}.${domain}"
+        fi
+        script+=("")
+        script+=("zone ${rev_zone}")
+        script+=("prereq yxdomain ${rev_zone}")
+        script+=("update ${action} $(to_ptr_v4 "${rdata##* }") ${ttl} IN PTR ${rr}")
+      fi
+    fi
+  fi
   script+=("send")
-  # script+=("answer")
+  script+=("answer")
   script+=("quit")
   # ...and run it
   status=$(
@@ -211,17 +249,7 @@ main() {
   prep_config "$@"
 
   # run the dns update...
-  echo "update status: $(nsupdate_wrap "${action}" "${ns}" "${domain}" "${ttl}" "${rtype}" "${rr}" "${rdata}")."
-  # ...handle the PTR if configured to do so.
-  if [[ "${rtype}" == "A" ]]; then
-    if [[ "${do_revdns}" == "true" ]] && [[ -n "${rev_zone}" ]]; then
-      if ! endswith "${rr}" "."; then
-        rr="${rr}.${domain}"
-      fi
-      nsupdate_wrap "${action}" "${ns}" "${rev_zone}" "${ttl}" "PTR" "$(to_ptr_v4 "${rdata##* }")" "${rr}" >/dev/null || true
-    fi
-  fi
-
+  nsupdate_wrap "${action}" "${ns}" "${domain}" "${ttl}" "${rtype}" "${rr}" "${rdata}"
   trap - ERR
 }
 
