@@ -44,6 +44,21 @@ HELP
 
 # utility functions
 
+# verify if the dependencies are available, in the most simple way
+requires() {
+    local cmd i
+    local -a nope
+    for cmd in "$@"; do
+        command -v "${cmd}" &> /dev/null || nope+=("$cmd")
+    done
+    if ((${#nope[@]} > 0)); then
+        echo "Some of the required dependencies are not available:"
+        for ((i=0; i<${#nope[@]}; i++)); do
+            echo "* ${nope[$i]}"
+        done
+        error "please install the dependencies in order to proceed"
+    fi
+}
 # reverse words of given string
 reverse() {
   for ((i = $#; i > 0; i--)); do
@@ -196,6 +211,9 @@ nsupdate_wrap() {
 # the actual script body
 main() {
   progname="$(basename "$0")"
+
+  # check for dependencies
+  requires confget dig nsupdate
 
   if (($# < 4)); then
     help "${progname}"
