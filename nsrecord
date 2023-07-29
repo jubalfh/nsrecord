@@ -28,11 +28,14 @@
 # TODO(1): add better error handling
 # TODO(2): add argument checking based on the record type
 
+# shellcheck disable=2250
+
 # error handling
 shopt -s extglob
 set -o errexit
 set -o errtrace
 set -o pipefail
+
 
 # usage
 help() {
@@ -84,6 +87,7 @@ endswith() {
 to_ptr_v4() {
   local ip rev_ip_data
   ip="$*"
+  # shellcheck disable=2046,2086
   rev_ip_data="$(reverse ${ip//./ })"
   echo "${rev_ip_data// /.}.in-addr.arpa."
 }
@@ -93,6 +97,7 @@ to_reverse_zone() {
   local ip
   local -a rev_ip_data
   ip="$*"
+  # shellcheck disable=2086,2046
   rev_ip_data="$(butfirst $(reverse ${ip//./ }))"
   echo "${rev_ip_data// /.}.in-addr.arpa."
 }
@@ -176,6 +181,7 @@ nsupdate_wrap() {
   script+=("update ${action} ${rr} ${rtype} ${rdata}")
   if [[ "${rtype}" == "A" ]]; then
     if [[ "${do_revdns}" == "true" ]]; then
+      # shellcheck disable=2046
       rev_zone="$(qualify $(to_reverse_zone "${rdata##* }"))"
       if [[ -v managed_reverse_zones["${rev_zone}" ]]; then
         if ! endswith "${rr}" "."; then
