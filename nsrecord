@@ -55,12 +55,7 @@ reverse() {
 }
 
 butfirst() {
-  for ((i = 2; i <= $#; i++)); do
-    echo -n ${!i}
-    if ((i < $#)); then
-      echo -n " "
-    fi
-  done
+  echo "${@:2}"
 }
 
 endswith() {
