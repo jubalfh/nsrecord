@@ -116,43 +116,6 @@ log() {
 
 # action starts here
 
-# prepare script configuration
-prep_config() {
-  # check for confget
-  which confget >/dev/null 2>&1 || (
-    echo "The confget utility is not available. Please install it."
-    exit 1
-  )
-  trap 'echo "Error code caught: ${PIPESTATUS[*]}"' ERR
-  # handle the actions
-  if [[ "$1" == "add" ]]; then
-    action="add"
-    shift
-  elif [[ "$1" =~ (del|delete) ]]; then
-    action="delete"
-    shift
-  fi
-  # assign arguments from command line, clean them a bit
-  read -r domain rtype rr rdata <<<"$@"
-  domain="$(unqualify "${domain}")"
-  rtype="${rtype^^}"
-  # read the configuration files (if they exist)
-  if [[ -e "/etc/nsrecord.ini" ]]; then
-    eval "$(confget -l -f "/etc/nsrecord.ini" -s default -S)"
-    eval "$(confget -l -f "/etc/nsrecord.ini" -s "${domain}" -S)"
-  fi
-  if [[ -e "${HOME}/.nsrecord/config" ]]; then
-    eval "$(confget -l -f "${HOME}/.nsrecord/config" -s default -S)"
-    eval "$(confget -l -f "${HOME}/.nsrecord/config" -s "${domain}" -S)"
-  fi
-  # create mapping for possible reverse zones
-  : "${reverse_zones:=""}"
-  declare -A managed_reverse_zones
-  for zone in ${reverse_zones}; do
-    managed_reverse_zones["$(qualify "${zone}")"]=1
-  done
-}
-
 # talk to the nsupdate command, catch errors, don't break
 nsupdate_wrap() {
   # handle arguments
@@ -240,8 +203,37 @@ main() {
   fi
 
   declare do_revdns rev_zone keyfile
+  declare -A managed_reverse_zones
 
-  prep_config "$@"
+  trap 'echo "Error code caught: ${PIPESTATUS[*]}"' ERR
+  # handle the actions
+  if [[ "$1" == "add" ]]; then
+    action="add"
+    shift
+  elif [[ "$1" =~ (del|delete) ]]; then
+    action="delete"
+    shift
+  fi
+
+  # assign arguments from command line, clean them a bit
+  read -r domain rtype rr rdata <<<"$@"
+  domain="$(unqualify "${domain}")"
+  rtype="${rtype^^}"
+  # read the configuration files (if they exist)
+  if [[ -e "/etc/nsrecord.ini" ]]; then
+    eval "$(confget -l -f "/etc/nsrecord.ini" -s default -S)"
+    eval "$(confget -l -f "/etc/nsrecord.ini" -s "${domain}" -S)"
+  fi
+  if [[ -e "${HOME}/.nsrecord/config" ]]; then
+    eval "$(confget -l -f "${HOME}/.nsrecord/config" -s default -S)"
+    eval "$(confget -l -f "${HOME}/.nsrecord/config" -s "${domain}" -S)"
+  fi
+
+  # create mapping for possible reverse zones
+  : "${reverse_zones:=""}"
+  for zone in ${reverse_zones}; do
+    managed_reverse_zones["$(qualify "${zone}")"]=1
+  done
 
   # run the dns update...
   nsupdate_wrap "${action}" "${ns}" "${domain}" "${ttl}" "${rtype}" "${rr}" "${rdata}"
