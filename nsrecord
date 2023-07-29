@@ -183,7 +183,7 @@ nsupdate_wrap() {
     if [[ "${do_revdns}" == "true" ]]; then
       # shellcheck disable=2046
       rev_zone="$(qualify $(to_reverse_zone "${rdata##* }"))"
-      if [[ -v managed_reverse_zones["${rev_zone}" ]]; then
+      if [[ -v "${managed_reverse_zones["${rev_zone}"]}" ]]; then
         if ! endswith "${rr}" "."; then
           rr="${rr}.${domain}"
         fi
